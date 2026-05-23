@@ -1,9 +1,15 @@
 # Deploy-Mod.ps1 — Copies built mod to BepInEx plugins folder
+# Pass -GameDir <path> or set $env:SIXAGES_GAME_DIR to point at your installed game.
 param(
-    [string]$GameDir = "C:\Program Files (x86)\alphatest\Six Ages 2 Lights Going Out"
+    [string]$GameDir = $env:SIXAGES_GAME_DIR
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $GameDir) {
+    Write-Host "GameDir not set. Pass -GameDir <path> or set `$env:SIXAGES_GAME_DIR." -ForegroundColor Red
+    exit 1
+}
 $ProjectRoot = Split-Path $PSScriptRoot -Parent
 $BuildDir = Join-Path $ProjectRoot "build"
 $PluginsDir = Join-Path $GameDir "BepInEx\plugins\SixAgesAccessibility"

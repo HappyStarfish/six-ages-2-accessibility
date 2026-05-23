@@ -1,21 +1,25 @@
-# Package-AccessibilityOnly.ps1 - Builds only the accessibility mod and bundles a ZIP.
+# Package-AccessibilityOnly.ps1 - Builds the accessibility mod and bundles a ZIP.
 #
-# Same idea as Package-Release.ps1 but WITHOUT the SixAgesDE translation mod.
-# Useful for recipients who only want the screen reader / keyboard navigation
-# (English-speaking players, or anyone playing without German translation).
+# Result mirrors the Six Ages 2 game folder structure - recipient extracts into
+# the game directory, merges/replaces, the mod loads on next launch.
 #
-# Result mirrors the LGO game folder structure - recipient extracts into the
-# game directory, merges/replaces, the mod loads on next launch.
+# Pass -GameDir <path> or set $env:SIXAGES_GAME_DIR to point at your installed
+# Six Ages 2 folder (needed for the bundled BepInEx core and Tolk DLLs).
 param(
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Debug",
-    [string]$GameDir = "C:\Program Files (x86)\alphatest\Six Ages 2 Lights Going Out",
+    [string]$GameDir = $env:SIXAGES_GAME_DIR,
     [string]$Version = (Get-Date -Format "yyyy-MM-dd"),
     [string]$OutputDir,
     [switch]$SkipBuild
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $GameDir) {
+    throw "GameDir not set. Pass -GameDir <path> or set `$env:SIXAGES_GAME_DIR to point at your installed Six Ages 2 folder."
+}
+
 $ProjectRoot = Split-Path $PSScriptRoot -Parent
 $BuildDir = Join-Path $ProjectRoot "build"
 if (-not $OutputDir) { $OutputDir = Join-Path $ProjectRoot "dist" }

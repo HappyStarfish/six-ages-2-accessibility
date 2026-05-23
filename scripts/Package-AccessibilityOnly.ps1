@@ -48,6 +48,7 @@ $files = @(
     @{ Src = (Join-Path $GameDir "Tolk.dll");                   Dst = "Tolk.dll" }
     @{ Src = (Join-Path $GameDir "nvdaControllerClient32.dll"); Dst = "nvdaControllerClient32.dll" }
     @{ Src = (Join-Path $BuildDir "SixAgesAccessibility.dll");  Dst = "BepInEx\plugins\SixAgesAccessibility\SixAgesAccessibility.dll" }
+    @{ Src = (Join-Path $ProjectRoot "README.md");              Dst = "README.md" }
 )
 
 $missing = @()

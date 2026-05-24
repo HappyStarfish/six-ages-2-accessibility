@@ -1,5 +1,9 @@
 # Six Ages 2: Lights Going Out — Accessibility Mod
 
+> **Status: stable beta** — well tested, daily-driven by a blind player. Rough edges and bugs are still possible; please report what breaks.
+>
+> The sibling project [Six Ages 1: Ride Like the Wind](https://github.com/HappyStarfish/six-ages-1-accessibility) exists too but is still in unstable alpha.
+
 Accessibility mod for [Six Ages 2: Lights Going Out](https://www.sixages.com/) that adds screen reader support (Tolk / NVDA) and keyboard navigation so blind and visually impaired players can play the game.
 
 ## Installation

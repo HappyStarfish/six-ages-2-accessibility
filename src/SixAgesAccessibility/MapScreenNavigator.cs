@@ -45,6 +45,28 @@ namespace SixAgesAccessibility
         private const int ZoneCount = 5;
         private const int SliderCount = 2;
 
+        // Hex-cursor POI filter — categories of "interesting things" the user can
+        // cycle through with PageUp/PageDown (entry) and Ctrl+PageUp/PageDown
+        // (category). Order is "most-frequently-useful first": own tribe is the
+        // top hit at the start of every turn, then known neighbours, then
+        // hostility-relevant clans, then geography and special hexes.
+        private enum PoiCategory
+        {
+            AllPois = 0,
+            OurTribe = 1,
+            KnownClans = 2,
+            Feuds = 3,
+            TradePartners = 4,
+            ChaosAndGorp = 5,
+            WildAndDunes = 6,
+            NamedZones = 7,
+            ActiveMissions = 8,
+            ExplorationFrontier = 9,
+            DeadHexes = 10,
+            MentionedHexes = 11,
+        }
+        private const int PoiCategoryCount = 12;
+
         private Zone _zone = Zone.Goals;
         private int _goalIndex = -1;
         private int _sliderIndex = -1;
@@ -70,6 +92,24 @@ namespace SixAgesAccessibility
         private readonly List<DestinationEntry> _allDestinations = new List<DestinationEntry>();
         private readonly List<DestinationEntry> _displayDestinations = new List<DestinationEntry>();
 
+        // POI catalogue for the hex-cursor zone. One list per category, built
+        // lazily on first PgUp/PgDn use and held until ResetForNewScreen wipes
+        // it. _poiCategory tracks which category is active; _poiIndex tracks the
+        // current entry within that category. Indices reset to 0 on category
+        // switch so the user always starts at the nearest entry.
+        private readonly List<HexPoi>[] _pois = new List<HexPoi>[PoiCategoryCount];
+        private bool _poisBuilt;
+        private PoiCategory _poiCategory = PoiCategory.OurTribe;
+        private int _poiIndex = -1;
+
+        private struct HexPoi
+        {
+            public int Row;
+            public int Col;
+            public string Label;     // optional short label (mission type, "Burnpeak", etc.)
+            public int CachedMiles;  // distance from player clan, -1 if unknown
+        }
+
         private struct DestinationEntry
         {
             public string Name;
@@ -93,6 +133,10 @@ namespace SixAgesAccessibility
             _sort = SortMode.Default;
             _allDestinations.Clear();
             _displayDestinations.Clear();
+            for (int i = 0; i < _pois.Length; i++) _pois[i] = null;
+            _poisBuilt = false;
+            _poiCategory = PoiCategory.OurTribe;
+            _poiIndex = -1;
             _confirmGate.Reset();
         }
 
@@ -324,26 +368,72 @@ namespace SixAgesAccessibility
                 totalWarriors == 1 ? Loc.Get(", with {0} warrior") : Loc.Get(", with {0} warriors"),
                 totalWarriors));
             sb.Append('.');
+
+            // AtHome downgrade prediction — Foray() silently switches to the
+            // goal_*AtHome variant when the cursor never moved, our own clan is
+            // selected, or the cursor sits inside our territory. Without this
+            // note the user can confirm a mission expecting Forage-abroad and
+            // get Forage-at-home instead.
+            string downgrade = GetAtHomeDowngradeReason(s);
+            if (downgrade != null)
+                sb.Append(Loc.Get(" Note: ")).Append(downgrade)
+                  .Append(Loc.Get(" — mission will resolve as foray at home."));
+
             return sb.ToString();
         }
 
         /// <summary>
-        /// Describe the current destination — the clan a target hex belongs to,
-        /// otherwise the closest map-zone label. Falls back to "no destination"
-        /// when nothing is targeted.
+        /// Describe the current destination by reading live game state — the
+        /// exploration cursor + mapAnnotations.selectedClan — rather than the
+        /// navigator's _destinationIndex. The earlier _destinationIndex path
+        /// went stale in several common situations: a Hex Cursor Space on an
+        /// unnamed hex left an old list entry pointed at, a mouse click never
+        /// updated the index at all, and a MapTapped rejection kept the index
+        /// on the rejected entry. The earlier Game.ClanVariable("targetClan")
+        /// lookup was dead — neither SA2 nor RLTW ever sets that variable
+        /// (verified across both decompiles). Result of the bug: the Enter-
+        /// confirmation summary named the wrong destination, or said "no
+        /// destination" when one was in fact set.
         /// </summary>
         private string DescribeCurrentDestination(MapScreenController s)
         {
             try
             {
-                int targetClan = Game.ClanVariable("targetClan");
-                if (targetClan > 0)
-                    return Clan.ClanWithIndex(targetClan).name;
+                if (!GetExplorationMoved(s))
+                    return Loc.Get("no destination chosen yet");
+
+                int sel = SafeSelectedClan(s);
+                if (sel > 0 && sel != PlayerClan.index)
+                {
+                    Clan c = Clan.ClanWithIndex(sel);
+                    if (!c.isNull) return c.name;
+                }
+                if (sel == PlayerClan.index)
+                    return Loc.Get("home");
+
+                Vector2 cursor = GetCursorPosition(s);
+                MapZone zone = WorldMap.ZoneAtPoint(cursor);
+                if (!zone.isNull)
+                {
+                    string label = zone.label;
+                    if (!string.IsNullOrEmpty(label)) return label;
+                    string name = zone.name;
+                    if (!string.IsNullOrEmpty(name) && !IsInternalZoneCode(name)) return name;
+                    string desc = DescribeWildZone(zone);
+                    if (!string.IsNullOrEmpty(desc)) return desc;
+                }
+
+                try
+                {
+                    HexGrid hex = MapHex.HexAtPoint(cursor);
+                    return string.Format(Loc.Get("hex {0}, {1}"), hex.row + 1, hex.column + 1);
+                }
+                catch { }
             }
-            catch (Exception ex) { DebugLogger.Error("MapScreenNav.DescribeCurrentDestination.targetClan", ex); }
-            // Fall back to the currently focused destination entry, if any.
-            if (_destinationIndex >= 0 && _destinationIndex < _displayDestinations.Count)
-                return _displayDestinations[_destinationIndex].Name ?? Loc.Get("no destination");
+            catch (Exception ex)
+            {
+                DebugLogger.Error("MapScreenNav.DescribeCurrentDestination", ex);
+            }
             return Loc.Get("no destination");
         }
 
@@ -400,7 +490,7 @@ namespace SixAgesAccessibility
                     AnnounceCurrentDestination(s);
                     break;
                 case Zone.HexCursor:
-                    ScreenReader.Say(Loc.Get("Hex cursor. Arrows move one hex, Shift+arrow five hexes. Home jumps to your clan, D describes, Space sets destination."));
+                    ScreenReader.Say(Loc.Get("Hex cursor. Arrows move one hex, Shift+arrow five hexes. Page Up and Down jump between points of interest, Ctrl with them switches category. Home jumps to your clan, D describes, Space sets destination."));
                     SyncHexFromCursor(s);
                     AnnounceCurrentHex(s);
                     break;
@@ -1177,6 +1267,26 @@ namespace SixAgesAccessibility
             int cols = MapHex.columns;
             if (rows <= 0 || cols <= 0) return;
 
+            // PageUp / PageDown — POI filter system. Bare keys cycle the entry
+            // index within the current category; Ctrl+key cycles category. Both
+            // move _hexRow/_hexCol to the target so the user can then Space to
+            // set it as the destination. Built lazily on first use.
+            bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
+            if (Input.GetKeyDown(KeyCode.PageDown))
+            {
+                EnsurePoisBuilt(s);
+                if (ctrl) CyclePoiCategory(s, +1);
+                else CyclePoiEntry(s, +1);
+                return;
+            }
+            if (Input.GetKeyDown(KeyCode.PageUp))
+            {
+                EnsurePoisBuilt(s);
+                if (ctrl) CyclePoiCategory(s, -1);
+                else CyclePoiEntry(s, -1);
+                return;
+            }
+
             // Big-step modifier — Shift moves five hexes at a time so the user can
             // sweep across the map quickly without hammering the arrow key 30 times.
             int step = AnyShift() ? 5 : 1;
@@ -1287,10 +1397,18 @@ namespace SixAgesAccessibility
 
         private void AnnounceCurrentHex(MapScreenController s)
         {
+            ScreenReader.Say(BuildHexAnnouncement(s));
+        }
+
+        /// <summary>Build the cursor-position announcement string. Split out from
+        /// AnnounceCurrentHex so the POI-jump path can prepend a "N of M, label"
+        /// context line and still speak the whole thing in a single ScreenReader.Say
+        /// call (multiple Say calls would interrupt each other).</summary>
+        private string BuildHexAnnouncement(MapScreenController s)
+        {
             if (_hexRow < 0 || _hexCol < 0)
             {
-                ScreenReader.Say(Loc.Get("Hex cursor not initialised."));
-                return;
+                return Loc.Get("Hex cursor not initialised.");
             }
             Vector2 center = HexCenter();
 
@@ -1325,7 +1443,7 @@ namespace SixAgesAccessibility
             catch (Exception ex) { DebugLogger.Error("MapScreenNav.HexMiles", ex); }
 
             sb.Append(Loc.Get("Space to set destination."));
-            ScreenReader.Say(sb.ToString());
+            return sb.ToString();
         }
 
         /// <summary>Identify the clan or named map zone that contains the given point.
@@ -1530,7 +1648,12 @@ namespace SixAgesAccessibility
             }
             else
             {
-                listInfo = ""; // unnamed hex — no list entry to sync to
+                // Unnamed hex — clear the list focus so a stale earlier list
+                // pick can't be reported by anything that still reads the
+                // index after Fix-1 removed the dependency from the Enter
+                // summary. Defense-in-depth.
+                _destinationIndex = -1;
+                listInfo = "";
             }
 
             // AtHome downgrade — picking a hex inside our own territory turns the
@@ -1858,6 +1981,460 @@ namespace SixAgesAccessibility
             ISubmitHandler handler = button as ISubmitHandler;
             if (handler == null) return;
             handler.OnSubmit(new BaseEventData(EventSystem.current));
+        }
+
+        // ---------- Hex POI catalogue (PgUp/PgDn filter system) ----------
+
+        /// <summary>Build every POI category once and cache. Called lazily on first
+        /// PgUp/PgDn use so the cost is paid only when the user opts into the filter
+        /// system. The cache survives until ResetForNewScreen wipes it.</summary>
+        private void EnsurePoisBuilt(MapScreenController s)
+        {
+            if (_poisBuilt) return;
+            try
+            {
+                for (int i = 0; i < _pois.Length; i++) _pois[i] = new List<HexPoi>();
+
+                BuildOurTribePois(_pois[(int)PoiCategory.OurTribe]);
+                BuildKnownClansPois(_pois[(int)PoiCategory.KnownClans]);
+                BuildFeudsPois(_pois[(int)PoiCategory.Feuds]);
+                BuildTradePartnersPois(_pois[(int)PoiCategory.TradePartners]);
+                BuildChaosAndGorpPois(_pois[(int)PoiCategory.ChaosAndGorp]);
+                BuildWildAndDunesPois(_pois[(int)PoiCategory.WildAndDunes]);
+                BuildNamedZonesPois(_pois[(int)PoiCategory.NamedZones]);
+                BuildActiveMissionsPois(_pois[(int)PoiCategory.ActiveMissions]);
+                BuildExplorationFrontierPois(_pois[(int)PoiCategory.ExplorationFrontier]);
+                BuildDeadHexPois(_pois[(int)PoiCategory.DeadHexes]);
+                BuildMentionedHexPois(_pois[(int)PoiCategory.MentionedHexes]);
+
+                // Distance pre-compute + sort, ascending. PgDn moves away from home,
+                // PgUp toward — matches the "nearest first" intuition.
+                for (int i = 0; i < _pois.Length; i++)
+                {
+                    if ((PoiCategory)i == PoiCategory.AllPois) continue;
+                    PrecomputeMilesAndSort(_pois[i]);
+                }
+
+                // AllPois — union of every per-clan / per-zone / mission / dead /
+                // mentioned hex, deduped by (row, col). Skips ExplorationFrontier
+                // (often 30+ entries and more useful as its own explicit category).
+                BuildAllPoisUnion(_pois[(int)PoiCategory.AllPois]);
+                PrecomputeMilesAndSort(_pois[(int)PoiCategory.AllPois]);
+
+                _poisBuilt = true;
+            }
+            catch (Exception ex)
+            {
+                DebugLogger.Error("MapScreenNav.EnsurePoisBuilt", ex);
+            }
+        }
+
+        private static void AddPoiFromCenter(List<HexPoi> dest, Vector2Int center, string label)
+        {
+            try
+            {
+                HexGrid hex = MapHex.HexAtPoint(new Vector2(center.x, center.y));
+                if (hex.row < 0 || hex.column < 0) return;
+                dest.Add(new HexPoi { Row = hex.row, Col = hex.column, Label = label ?? "", CachedMiles = -1 });
+            }
+            catch (Exception ex) { DebugLogger.Error("MapScreenNav.AddPoiFromCenter", ex); }
+        }
+
+        private static void BuildOurTribePois(List<HexPoi> dest)
+        {
+            try
+            {
+                Clan home = Clan.ClanWithIndex(PlayerClan.index);
+                if (!home.isNull) AddPoiFromCenter(dest, home.center, Loc.Get("Home (") + home.name + ")");
+
+                ClanDataList list = new ClanDataList(ClanFilterBy.filter_KnownClans);
+                for (int i = 0; i < list.count; i++)
+                {
+                    Clan c = list[i];
+                    if (c.isNull || c.index == PlayerClan.index) continue;
+                    if (!c.inOurTribe) continue;
+                    AddPoiFromCenter(dest, c.center, c.name);
+                }
+            }
+            catch (Exception ex) { DebugLogger.Error("MapScreenNav.BuildOurTribePois", ex); }
+        }
+
+        private static void BuildKnownClansPois(List<HexPoi> dest)
+        {
+            try
+            {
+                ClanDataList list = new ClanDataList(ClanFilterBy.filter_KnownClans);
+                for (int i = 0; i < list.count; i++)
+                {
+                    Clan c = list[i];
+                    if (c.isNull || c.index == PlayerClan.index) continue;
+                    // Clans that fit a dedicated category are routed there instead, so
+                    // the "known clans" bucket holds only the neutral remainder.
+                    if (c.inOurTribe || c.haveFeud || c.haveTrade) continue;
+                    AddPoiFromCenter(dest, c.center, c.name);
+                }
+            }
+            catch (Exception ex) { DebugLogger.Error("MapScreenNav.BuildKnownClansPois", ex); }
+        }
+
+        private static void BuildFeudsPois(List<HexPoi> dest)
+        {
+            try
+            {
+                ClanDataList list = new ClanDataList(ClanFilterBy.filter_KnownClans);
+                for (int i = 0; i < list.count; i++)
+                {
+                    Clan c = list[i];
+                    if (c.isNull || c.index == PlayerClan.index) continue;
+                    if (!c.haveFeud) continue;
+                    AddPoiFromCenter(dest, c.center, c.name);
+                }
+            }
+            catch (Exception ex) { DebugLogger.Error("MapScreenNav.BuildFeudsPois", ex); }
+        }
+
+        private static void BuildTradePartnersPois(List<HexPoi> dest)
+        {
+            try
+            {
+                ClanDataList list = new ClanDataList(ClanFilterBy.filter_KnownClans);
+                for (int i = 0; i < list.count; i++)
+                {
+                    Clan c = list[i];
+                    if (c.isNull || c.index == PlayerClan.index) continue;
+                    if (!c.haveTrade) continue;
+                    AddPoiFromCenter(dest, c.center, c.name);
+                }
+            }
+            catch (Exception ex) { DebugLogger.Error("MapScreenNav.BuildTradePartnersPois", ex); }
+        }
+
+        private static void BuildChaosAndGorpPois(List<HexPoi> dest)
+        {
+            AppendClanFilterAsPois(dest, ClanFilterBy.filter_ChaosNest, Loc.Get("Chaos Nest"));
+            AppendClanFilterAsPois(dest, ClanFilterBy.filter_GorpedTerritory, Loc.Get("Gorp territory"));
+        }
+
+        private static void BuildWildAndDunesPois(List<HexPoi> dest)
+        {
+            AppendClanFilterAsPois(dest, ClanFilterBy.filter_Uninhabited, Loc.Get("Abandoned land"));
+            AppendClanFilterAsPois(dest, ClanFilterBy.filter_Duneland, Loc.Get("Dunes"));
+        }
+
+        private static void AppendClanFilterAsPois(List<HexPoi> dest, ClanFilterBy filter, string label)
+        {
+            try
+            {
+                ClanDataList list = new ClanDataList(filter);
+                for (int i = 0; i < list.count; i++)
+                {
+                    Clan c = list[i];
+                    if (c.isNull) continue;
+                    string name = list.count > 1 ? (label + " " + (i + 1)) : label;
+                    AddPoiFromCenter(dest, c.center, name);
+                }
+            }
+            catch (Exception ex) { DebugLogger.Error("MapScreenNav.AppendClanFilterAsPois", ex); }
+        }
+
+        private static void BuildNamedZonesPois(List<HexPoi> dest)
+        {
+            try
+            {
+                int count = PluginImport.MapZone_Count();
+                for (int i = 0; i < count; i++)
+                {
+                    var zone = new MapZone { index = i };
+                    if (zone.isClanZone) continue;
+                    if ((zone.flags & ZoneFlags.kLabelOnly) != 0) continue;
+                    string label = zone.label;
+                    string name = zone.name;
+                    if (string.IsNullOrEmpty(label) && string.IsNullOrEmpty(name)) continue;
+                    if (string.IsNullOrEmpty(label) && IsInternalZoneCode(name)) continue;
+                    if (name != null && name.StartsWith("Across", StringComparison.Ordinal)) continue;
+
+                    string display = !string.IsNullOrEmpty(label) ? label : name;
+                    Rect bounds = zone.bounds;
+                    Vector2 c = new Vector2(bounds.x + bounds.width * 0.5f, bounds.y + bounds.height * 0.5f);
+                    try
+                    {
+                        HexGrid hex = MapHex.HexAtPoint(c);
+                        if (hex.row < 0 || hex.column < 0) continue;
+                        dest.Add(new HexPoi { Row = hex.row, Col = hex.column, Label = display, CachedMiles = -1 });
+                    }
+                    catch (Exception ex) { DebugLogger.Error("MapScreenNav.BuildNamedZonesPois.zone", ex); }
+                }
+            }
+            catch (Exception ex) { DebugLogger.Error("MapScreenNav.BuildNamedZonesPois", ex); }
+        }
+
+        /// <summary>Iterate every action-mission queue and collect hex positions of
+        /// outgoing missions. Game_InitMissionQueue is shared global state primed
+        /// per-type; each call wipes the previous queue, so we collect immediately
+        /// after each Init. The screen's UpdateUI() re-primes its own missionType
+        /// on the next frame, so no state restoration is needed.</summary>
+        private static void BuildActiveMissionsPois(List<HexPoi> dest)
+        {
+            QType[] types = new QType[7]
+            {
+                QType.type_Raid, QType.type_Emissary, QType.type_Trade, QType.type_War,
+                QType.type_Exploration, QType.type_CattleRaid, QType.type_HonorRaid
+            };
+            for (int t = 0; t < types.Length; t++)
+            {
+                try
+                {
+                    int n = PluginImport.Game_InitMissionQueue((int)types[t]);
+                    string typeLabel = MissionTypeLabel(types[t]);
+                    for (int i = 0; i < n; i++)
+                    {
+                        float x = PluginImport.Game_MissionQueue_CenterX(i);
+                        float y = PluginImport.Game_MissionQueue_CenterY(i);
+                        try
+                        {
+                            HexGrid hex = MapHex.HexAtPoint(new Vector2(x, y));
+                            if (hex.row < 0 || hex.column < 0) continue;
+                            dest.Add(new HexPoi { Row = hex.row, Col = hex.column, Label = typeLabel, CachedMiles = -1 });
+                        }
+                        catch (Exception ex) { DebugLogger.Error("MapScreenNav.BuildActiveMissionsPois.hex", ex); }
+                    }
+                }
+                catch (Exception ex) { DebugLogger.Error("MapScreenNav.BuildActiveMissionsPois.type", ex); }
+            }
+        }
+
+        private static string MissionTypeLabel(QType t)
+        {
+            switch (t)
+            {
+                case QType.type_Raid:        return Loc.Get("active raid");
+                case QType.type_Emissary:    return Loc.Get("active emissary");
+                case QType.type_Trade:       return Loc.Get("active trade mission");
+                case QType.type_War:         return Loc.Get("active war party");
+                case QType.type_Exploration: return Loc.Get("active exploration");
+                case QType.type_CattleRaid:  return Loc.Get("active cattle raid");
+                case QType.type_HonorRaid:   return Loc.Get("active honor raid");
+                default:                     return Loc.Get("active mission");
+            }
+        }
+
+        /// <summary>Explored, accessible hexes that have at least one accessible
+        /// but unexplored neighbour — the actual edge of the player's knowledge.
+        /// Useful for picking foray destinations that push exploration outward.</summary>
+        private static void BuildExplorationFrontierPois(List<HexPoi> dest)
+        {
+            try
+            {
+                int rows = MapHex.rows;
+                int cols = MapHex.columns;
+                if (rows <= 0 || cols <= 0) return;
+                for (int r = 0; r < rows; r++)
+                {
+                    for (int c = 0; c < cols; c++)
+                    {
+                        if (!MapHex.IsExplored(r, c)) continue;
+                        if (MapHex.IsDead(r, c)) continue;
+                        if (!HasAccessibleUnexploredNeighbor(r, c, rows, cols)) continue;
+                        dest.Add(new HexPoi { Row = r, Col = c, Label = Loc.Get("frontier"), CachedMiles = -1 });
+                    }
+                }
+            }
+            catch (Exception ex) { DebugLogger.Error("MapScreenNav.BuildExplorationFrontierPois", ex); }
+        }
+
+        /// <summary>True 6-neighbour hex adjacency. MapHex shifts odd rows left
+        /// by half a hex (ColumnOffset=-15), so the upper/lower neighbour pair
+        /// differs by row parity. Same-row neighbours are always (r, c±1).</summary>
+        private static bool HasAccessibleUnexploredNeighbor(int r, int c, int rows, int cols)
+        {
+            int[] dr = new int[6] { 0, 0, -1, -1, 1, 1 };
+            int[] dc;
+            if ((r & 1) == 1) dc = new int[6] { -1, 1, -1, 0, -1, 0 };
+            else              dc = new int[6] { -1, 1,  0, 1,  0, 1 };
+
+            for (int k = 0; k < 6; k++)
+            {
+                int nr = r + dr[k];
+                int nc = c + dc[k];
+                if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+                if (!MapHex.IsAccessible(nr, nc)) continue;
+                if (MapHex.IsExplored(nr, nc)) continue;
+                return true;
+            }
+            return false;
+        }
+
+        private static void BuildDeadHexPois(List<HexPoi> dest)
+        {
+            try
+            {
+                int rows = MapHex.rows;
+                int cols = MapHex.columns;
+                if (rows <= 0 || cols <= 0) return;
+                for (int r = 0; r < rows; r++)
+                    for (int c = 0; c < cols; c++)
+                        if (MapHex.IsDead(r, c))
+                            dest.Add(new HexPoi { Row = r, Col = c, Label = Loc.Get("dead hex"), CachedMiles = -1 });
+            }
+            catch (Exception ex) { DebugLogger.Error("MapScreenNav.BuildDeadHexPois", ex); }
+        }
+
+        private static void BuildMentionedHexPois(List<HexPoi> dest)
+        {
+            try
+            {
+                int rows = MapHex.rows;
+                int cols = MapHex.columns;
+                if (rows <= 0 || cols <= 0) return;
+                // kMentionedHex = 3 (see MapHex constants). Hexes that lore or news
+                // referenced but the player has not personally explored.
+                for (int r = 0; r < rows; r++)
+                    for (int c = 0; c < cols; c++)
+                        if (MapHex.Explored(r, c) == 3)
+                            dest.Add(new HexPoi { Row = r, Col = c, Label = Loc.Get("mentioned"), CachedMiles = -1 });
+            }
+            catch (Exception ex) { DebugLogger.Error("MapScreenNav.BuildMentionedHexPois", ex); }
+        }
+
+        private void BuildAllPoisUnion(List<HexPoi> dest)
+        {
+            // Dedupe by packed (row, col). 100_000 column-stride is safe — game maps
+            // are well under that width even with margin.
+            var seen = new HashSet<long>();
+            for (int i = 0; i < _pois.Length; i++)
+            {
+                PoiCategory cat = (PoiCategory)i;
+                if (cat == PoiCategory.AllPois || cat == PoiCategory.ExplorationFrontier) continue;
+                var list = _pois[i];
+                if (list == null) continue;
+                for (int j = 0; j < list.Count; j++)
+                {
+                    HexPoi p = list[j];
+                    long key = (long)p.Row * 100000L + p.Col;
+                    if (seen.Contains(key)) continue;
+                    seen.Add(key);
+                    dest.Add(p);
+                }
+            }
+        }
+
+        private static void PrecomputeMilesAndSort(List<HexPoi> list)
+        {
+            if (list == null || list.Count == 0) return;
+            for (int i = 0; i < list.Count; i++)
+            {
+                HexPoi p = list[i];
+                int miles = -1;
+                try
+                {
+                    Rect r = MapHex.RectFor(p.Row, p.Col);
+                    int x = (int)(r.x + r.width * 0.5f);
+                    int y = (int)(r.y + r.height * 0.5f);
+                    miles = PluginImport.Mission_MilesFromPlayerClan(x, y);
+                }
+                catch (Exception ex) { DebugLogger.Error("MapScreenNav.PrecomputeMiles", ex); }
+                p.CachedMiles = miles;
+                list[i] = p;
+            }
+            list.Sort(ComparePoiByMiles);
+        }
+
+        private static int ComparePoiByMiles(HexPoi a, HexPoi b)
+        {
+            int am = a.CachedMiles < 0 ? int.MaxValue : a.CachedMiles;
+            int bm = b.CachedMiles < 0 ? int.MaxValue : b.CachedMiles;
+            return am.CompareTo(bm);
+        }
+
+        private void CyclePoiCategory(MapScreenController s, int dir)
+        {
+            int start = (int)_poiCategory;
+            // Walk the ring of categories; the first one with entries wins. If none
+            // has any (very fresh game or odd save), tell the user and bail.
+            for (int step = 1; step <= PoiCategoryCount; step++)
+            {
+                int cand = ((start + dir * step) % PoiCategoryCount + PoiCategoryCount) % PoiCategoryCount;
+                var list = _pois[cand];
+                if (list != null && list.Count > 0)
+                {
+                    _poiCategory = (PoiCategory)cand;
+                    _poiIndex = 0;
+                    // Single Say call — a separate "Category X, N entries" Say would
+                    // be immediately interrupted by the entry announcement, so the
+                    // category name has to ride at the head of the same string.
+                    JumpToCurrentPoi(s, includeCategoryHeader: true);
+                    return;
+                }
+            }
+            ScreenReader.Say(Loc.Get("No points of interest found on this map."));
+        }
+
+        private void CyclePoiEntry(MapScreenController s, int dir)
+        {
+            var list = _pois[(int)_poiCategory];
+            if (list == null || list.Count == 0)
+            {
+                // Current category empty (the user may have switched into it before
+                // anything was built, or all entries vanished). Roll forward to find
+                // a non-empty one rather than swallowing the keypress silently.
+                CyclePoiCategory(s, +1);
+                return;
+            }
+            if (_poiIndex < 0) _poiIndex = 0;
+            else
+            {
+                _poiIndex = (_poiIndex + dir) % list.Count;
+                if (_poiIndex < 0) _poiIndex += list.Count;
+            }
+            JumpToCurrentPoi(s, includeCategoryHeader: false);
+        }
+
+        /// <summary>Move the hex cursor to the current POI and announce. When
+        /// includeCategoryHeader is true the announcement leads with the category
+        /// name and entry count — used when the user explicitly switched categories
+        /// so they know what set of entries they're now scrolling through. Everything
+        /// is built into a single string because a separate Say call for the header
+        /// would be interrupted by the entry announcement that follows it.</summary>
+        private void JumpToCurrentPoi(MapScreenController s, bool includeCategoryHeader)
+        {
+            var list = _pois[(int)_poiCategory];
+            if (list == null || list.Count == 0) return;
+            if (_poiIndex < 0 || _poiIndex >= list.Count) _poiIndex = 0;
+            HexPoi p = list[_poiIndex];
+            _hexRow = p.Row;
+            _hexCol = p.Col;
+
+            var sb = new StringBuilder();
+            if (includeCategoryHeader)
+            {
+                sb.Append(string.Format(
+                    Loc.Get("Category {0}, {1} entries. "),
+                    PoiCategoryName(_poiCategory), list.Count));
+            }
+            sb.Append(string.Format(Loc.Get("{0} of {1}. "), _poiIndex + 1, list.Count));
+            if (!string.IsNullOrEmpty(p.Label)) sb.Append(p.Label).Append(". ");
+            sb.Append(BuildHexAnnouncement(s));
+            ScreenReader.Say(sb.ToString());
+        }
+
+        private static string PoiCategoryName(PoiCategory c)
+        {
+            switch (c)
+            {
+                case PoiCategory.AllPois:             return Loc.Get("all points of interest");
+                case PoiCategory.OurTribe:            return Loc.Get("our tribe");
+                case PoiCategory.KnownClans:          return Loc.Get("known clans");
+                case PoiCategory.Feuds:               return Loc.Get("feuds");
+                case PoiCategory.TradePartners:       return Loc.Get("trade partners");
+                case PoiCategory.ChaosAndGorp:        return Loc.Get("chaos and gorp");
+                case PoiCategory.WildAndDunes:        return Loc.Get("wildlands and dunes");
+                case PoiCategory.NamedZones:          return Loc.Get("named zones");
+                case PoiCategory.ActiveMissions:      return Loc.Get("active missions");
+                case PoiCategory.ExplorationFrontier: return Loc.Get("exploration frontier");
+                case PoiCategory.DeadHexes:           return Loc.Get("dead hexes");
+                case PoiCategory.MentionedHexes:      return Loc.Get("mentioned hexes");
+                default: return c.ToString();
+            }
         }
 
         private static bool HasCtrlAlt()

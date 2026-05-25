@@ -71,13 +71,6 @@ namespace SixAgesAccessibility
                 return;
             }
 
-            // Ctrl+R — read full details
-            if (Input.GetKeyDown(KeyCode.R) && (Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl)))
-            {
-                AnnounceSelectedDetails(mc);
-                return;
-            }
-
             // D — read description/tooltip for current focus
             if (Input.GetKeyDown(KeyCode.D))
             {
@@ -239,8 +232,7 @@ namespace SixAgesAccessibility
             }
 
             // Model Y: the list browses on arrows (selection follows focus);
-            // details are read with D, full details with Ctrl+R. Enter has no
-            // separate role here.
+            // details are read with D. Enter has no separate role here.
         }
 
         private void HandleBlessingInput(MagicScreenController mc)

@@ -56,9 +56,6 @@ namespace SixAgesAccessibility
         /// <summary>D reads a fuller description of the focused item.</summary>
         public static string Describe => Loc.Get("D reads details. ");
 
-        /// <summary>Ctrl+R re-announces the current screen.</summary>
-        public static string Repeat => Loc.Get("Ctrl R repeats the screen. ");
-
         /// <summary>H repeats the current tutorial hint card.</summary>
         public static string Hint => Loc.Get("H repeats the tutorial hint. ");
 

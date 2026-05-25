@@ -1292,8 +1292,8 @@ namespace SixAgesAccessibility
             Loc.Register("Destination list. Filter ", "Zielliste. Filter ");
             Loc.Register(", sort ", ", Sortierung ");
             Loc.Register(". F filters, O orders.", ". F filtert, O sortiert.");
-            Loc.Register("Hex cursor. Arrows move one hex, Shift+arrow five hexes. Home jumps to your clan, D describes, Space sets destination.",
-                "Hex-Cursor. Pfeile bewegen ein Hex, Umschalt plus Pfeil fünf Hex. Pos1 springt zu eurem Klan, D beschreibt, Leertaste setzt das Reiseziel.");
+            Loc.Register("Hex cursor. Arrows move one hex, Shift+arrow five hexes. Page Up and Down jump between points of interest, Ctrl with them switches category. Home jumps to your clan, D describes, Space sets destination.",
+                "Hex-Cursor. Pfeile bewegen ein Hex, Umschalt plus Pfeil fünf Hex. Bild-auf und Bild-ab springen zwischen wichtigen Orten, Strg dazu wechselt die Kategorie. Pos1 springt zu eurem Klan, D beschreibt, Leertaste setzt das Reiseziel.");
             // Filter names.
             Loc.Register("all", "alle");
             Loc.Register("clans only", "nur Klans");
@@ -1359,6 +1359,34 @@ namespace SixAgesAccessibility
             Loc.Register("No description available for this hex.",
                 "Keine Beschreibung für dieses Hex verfügbar.");
             Loc.Register("Hex cursor not initialised.", "Hex-Cursor nicht initialisiert.");
+            // Hex POI filter (PgUp/PgDn within HexCursor zone).
+            Loc.Register("Category {0}, {1} entries. ", "Kategorie {0}, {1} Einträge. ");
+            Loc.Register("{0} of {1}. ", "{0} von {1}. ");
+            Loc.Register("No points of interest found on this map.",
+                "Keine wichtigen Orte auf dieser Karte gefunden.");
+            // POI category names.
+            Loc.Register("all points of interest", "alle wichtigen Orte");
+            Loc.Register("known clans", "bekannte Klans");
+            Loc.Register("trade partners", "Handelspartner");
+            Loc.Register("chaos and gorp", "Chaos und Gorp");
+            Loc.Register("wildlands and dunes", "Wildland und Dünen");
+            Loc.Register("named zones", "benannte Zonen");
+            Loc.Register("active missions", "aktive Missionen");
+            Loc.Register("exploration frontier", "Erkundungsgrenze");
+            Loc.Register("dead hexes", "tote Hexe");
+            Loc.Register("mentioned hexes", "erwähnte Hexe");
+            // POI labels (shown after "N of M. ").
+            Loc.Register("active raid", "aktiver Überfall");
+            Loc.Register("active emissary", "aktiver Gesandter");
+            Loc.Register("active trade mission", "aktive Handelsmission");
+            Loc.Register("active war party", "aktive Kriegspartei");
+            Loc.Register("active exploration", "aktive Erkundung");
+            Loc.Register("active cattle raid", "aktiver Viehraub");
+            Loc.Register("active honor raid", "aktiver Ehrenraub");
+            Loc.Register("active mission", "aktive Mission");
+            Loc.Register("frontier", "Grenze");
+            Loc.Register("dead hex", "totes Hex");
+            Loc.Register("mentioned", "erwähnt");
             Loc.Register("Dead — no longer exists. ", "Tot — existiert nicht mehr. ");
             Loc.Register("Inaccessible. ", "Unzugänglich. ");
             Loc.Register("Unexplored. ", "Unerkundet. ");
@@ -1745,7 +1773,6 @@ namespace SixAgesAccessibility
             Loc.Register("Tab cycles the buttons. ", "Tab wechselt durch die Knöpfe. ");
             Loc.Register("Tab cycles the zones. ", "Tab wechselt die Zonen. ");
             Loc.Register("D reads details. ", "D liest Details. ");
-            Loc.Register("Ctrl R repeats the screen. ", "Strg R wiederholt den Bildschirm. ");
             Loc.Register("H repeats the tutorial hint. ", "H wiederholt den Tutorial-Hinweis. ");
             Loc.Register("Shift F1 lists the keys for this screen. ",
                 "Umschalt F1 nennt die Tasten für diesen Bildschirm. ");
@@ -1831,6 +1858,9 @@ namespace SixAgesAccessibility
             Loc.Register(
                 "G focuses the target zone, K the target list, X the foray panel. Enter sends the mission, Escape cancels. ",
                 "G springt zur Zielzone, K zur Ziel-Liste, X zum Foray-Panel. Eingabe sendet die Mission, Escape bricht ab. ");
+            Loc.Register(
+                "In the hex cursor zone, Page Up and Down jump between points of interest, Ctrl with them switches category. ",
+                "Im Hex-Cursor-Bereich springen Bild-auf und Bild-ab zwischen wichtigen Orten, Strg dazu wechselt die Kategorie. ");
             Loc.Register(
                 "In the list, Space toggles ring membership and C makes the person chieftain. F changes the sort order. Enter applies the reorganization, Escape discards it. ",
                 "In der Liste schaltet Leertaste die Ring-Mitgliedschaft, C macht die Person zum Häuptling. F ändert die Sortierung. Eingabe wendet die Umordnung an, Escape verwirft sie. ");
